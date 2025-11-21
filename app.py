@@ -18,6 +18,15 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 import subprocess
 import shutil
 import glob
+import atexit
+
+# NEW: imageio-ffmpeg provides a bundled ffmpeg binary usable in no-root envs (Streamlit Cloud)
+try:
+    import imageio_ffmpeg as iio_ffmpeg
+    FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    iio_ffmpeg = None
+    FFMPEG_EXE = None
 
 # Load environment variables
 load_dotenv()
@@ -89,7 +98,6 @@ def save_log(log_data, log_type="video_analysis"):
             return {k: clean(v) for k, v in obj.items() if k != "image"}
         if isinstance(obj, list):
             return [clean(i) for i in obj]
-        # Convert numpy types to Python native types
         if isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
         if isinstance(obj, (np.floating, np.float64, np.float32)):
@@ -115,17 +123,23 @@ def compute_sharpness(face_img):
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
 def get_video_duration(video_path):
-    """OPTIMIZED: Use FFprobe only, faster than OpenCV fallback"""
+    """Try to get duration by parsing ffmpeg stderr output"""
+    exe = FFMPEG_EXE or shutil.which('ffmpeg')
+    if not exe:
+        return 0
     try:
-        cmd = [
-            'ffprobe', '-v', 'error', 
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1', 
-            video_path
-        ]
+        cmd = [exe, '-i', video_path]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        return float(result.stdout.strip())
-    except:
+        stderr = result.stderr or result.stdout or ""
+        import re
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", stderr)
+        if m:
+            hours = int(m.group(1))
+            minutes = int(m.group(2))
+            seconds = float(m.group(3))
+            return hours * 3600 + minutes * 60 + seconds
+        return 0
+    except Exception:
         return 0
 
 def clear_folder(folder_path):
@@ -136,8 +150,8 @@ def clear_folder(folder_path):
         except:
             pass
 
-def cleanup_temp_folders():
-    """NEW: Automatically delete all files from frames and annotated folders"""
+def cleanup_processing_folders():
+    """Clean up frames and annotated folders after processing"""
     try:
         clear_folder(FRAMES_DIR)
         clear_folder(ANNOTATED_DIR)
@@ -148,27 +162,22 @@ def cleanup_temp_folders():
 # ================== OPTIMIZED FFMPEG EXTRACTION ==================
 
 def extract_frames_ffmpeg(video_path, output_folder, fps_extract=1.0):
-    """
-    ULTRA-FAST frame extraction with optimizations:
-    - Lower quality JPEG (faster writes)
-    - Skip B-frames for faster seeking
-    - Use hardware acceleration if available
-    """
-    if not shutil.which('ffmpeg'):
-        st.error("❌ FFmpeg not found! Please install FFmpeg")
+    """ULTRA-FAST frame extraction with optimizations"""
+    exe = FFMPEG_EXE or shutil.which('ffmpeg')
+    if not exe:
+        st.error("❌ FFmpeg not found! Add 'imageio-ffmpeg' to your requirements or install ffmpeg system-wide.")
         return []
     
     clear_folder(output_folder)
     
     duration = get_video_duration(video_path)
-    expected_frames = int(duration * fps_extract)
-    st.info(f"🎯 Extracting {expected_frames} frames ({fps_extract} fps)")
+    expected_frames = int(duration * fps_extract) if duration > 0 else "unknown"
+    st.info(f"🎯 Extracting ~{expected_frames} frames ({fps_extract} fps)")
     
     output_pattern = os.path.join(output_folder, "frame_%04d.jpg")
     
     command = [
-        'ffmpeg',
-        '-hwaccel', 'auto',
+        exe,
         '-skip_frame', 'nokey',
         '-i', video_path,
         '-vf', f'fps={fps_extract}',
@@ -211,12 +220,10 @@ def extract_frames_ffmpeg(video_path, output_folder, fps_extract=1.0):
         st.error(f"❌ FFmpeg error: {str(e)}")
         return []
 
-# ================== OPTIMIZED FACE DETECTION WITH BATCHING ==================
+# ================== OPTIMIZED FACE DETECTION ==================
 
 def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
-    """
-    OPTIMIZED: Process frames with early stopping and reduced overhead
-    """
+    """OPTIMIZED: Process frames with early stopping and reduced overhead"""
     results = []
     frames_with_players = []
     
@@ -236,7 +243,6 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                 continue
             
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
             faces = face_app.get(frame_rgb)
             
             if not faces:
@@ -250,7 +256,6 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
             detections = []
             for face in faces:
                 x1, y1, x2, y2 = face.bbox.astype(int)
-                
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(frame_rgb.shape[1], x2), min(frame_rgb.shape[0], y2)
                 
@@ -258,7 +263,6 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                     continue
                 
                 face_crop = frame_rgb[y1:y2, x1:x2]
-                
                 sharpness = compute_sharpness(face_crop)
                 if sharpness < sharp_threshold:
                     continue
@@ -270,14 +274,14 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                 confidence = None
                 if hasattr(clf, "predict_proba"):
                     proba = clf.predict_proba([embedding])
-                    confidence = float(np.max(proba) * 100)
+                    confidence = np.max(proba) * 100
                 
                 if confidence is not None and confidence < conf_threshold:
                     continue
                 
                 detections.append({
                     'name': predicted_name,
-                    'confidence': confidence if confidence else 0.0,
+                    'confidence': float(confidence) if confidence else 0.0,
                     'bbox': [int(x1), int(y1), int(x2), int(y2)]
                 })
             
@@ -324,7 +328,6 @@ def analyze_frame_llm_worker(args):
             return None
         
         image = Image.open(frame_data['annotated_path'])
-        
         players = [d['name'] for d in frame_data['detections']]
         prompt = get_frame_analysis_prompt(players)
         
@@ -344,9 +347,7 @@ def analyze_frame_llm_worker(args):
         }
 
 def parallel_llm_analysis(frames_with_players, num_workers=4):
-    """
-    OPTIMIZED: Process in batches to reduce API overhead
-    """
+    """OPTIMIZED: Process in batches to reduce API overhead"""
     if not frames_with_players:
         return []
     
@@ -384,9 +385,7 @@ def parallel_llm_analysis(frames_with_players, num_workers=4):
 # ================== FINAL SUMMARY GENERATION ==================
 
 def generate_final_summary(llm_analyses, all_detected_players):
-    """
-    Generate final summary using existing prompt from prompts.py
-    """
+    """Generate final summary using existing prompt from prompts.py"""
     if not GEMINI_API_KEY or not llm_analyses:
         return None
     
@@ -402,7 +401,6 @@ def generate_final_summary(llm_analyses, all_detected_players):
             })
         
         prompt = get_final_summary_prompt(frame_analyses, all_detected_players)
-        
         response = model.generate_content(prompt)
         
         if response and response.text:
@@ -416,9 +414,7 @@ def generate_final_summary(llm_analyses, all_detected_players):
 # ================== COMPLETE ULTRA-FAST PIPELINE ==================
 
 def process_video_ultrafast(video_path, conf_threshold, sharp_threshold, fps_extract, num_workers):
-    """
-    Ultra-fast 3-step pipeline + Final Summary + Auto Cleanup
-    """
+    """Ultra-fast 3-step pipeline + Final Summary"""
     pipeline_start = datetime.now()
     
     # Step 1: FFmpeg Direct Frame Extraction
@@ -466,7 +462,6 @@ def process_video_ultrafast(video_path, conf_threshold, sharp_threshold, fps_ext
         step4_time = (datetime.now() - step4_start).total_seconds()
         st.info(f"⏱️ Summary time: {step4_time:.2f}s")
     
-    # Calculate total time
     total_time = (datetime.now() - pipeline_start).total_seconds()
     
     return {
@@ -511,7 +506,7 @@ def process_image(image_np, conf_threshold, sharp_threshold, show_bbox, show_con
         confidence = None
         if hasattr(clf, "predict_proba"):
             proba = clf.predict_proba([embedding])
-            confidence = float(np.max(proba) * 100)
+            confidence = np.max(proba) * 100
 
         if confidence is not None and confidence < conf_threshold:
             continue
@@ -596,10 +591,11 @@ else:  # Video mode
     if not GEMINI_API_KEY:
         st.warning("⚠️ GEMINI_API_KEY not found in .env file. AI analysis will be disabled.")
     
-    if not shutil.which('ffmpeg'):
-        st.error("❌ FFmpeg not found! Please install FFmpeg for ultra-fast processing.")
-        st.markdown("**Install FFmpeg:**")
-        st.code("# Windows (using Chocolatey)\nchoco install ffmpeg\n\n# Or download from: https://ffmpeg.org/download.html")
+    exe = FFMPEG_EXE or shutil.which('ffmpeg')
+    if not exe:
+        st.error("❌ FFmpeg not found! For Streamlit Cloud add 'imageio-ffmpeg' to your requirements.txt.")
+        st.markdown("**Install FFmpeg in this environment:**")
+        st.code("Add to requirements.txt:\nimageio-ffmpeg\n\nOr install ffmpeg system-wide for self-hosted deployments.")
     
     uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov", "mkv", "flv", "wmv"])
     
@@ -612,6 +608,7 @@ else:  # Video mode
         
         if st.button("🚀 Process Video (Ultra Fast)", type="primary"):
             
+            # Clear previous results
             clear_folder(FRAMES_DIR)
             clear_folder(ANNOTATED_DIR)
             
@@ -649,7 +646,7 @@ else:  # Video mode
                 else:
                     st.warning("⚠️ No players detected in the video")
                 
-                # FINAL SUMMARY
+                # Display final summary
                 if video_data.get('final_summary'):
                     st.subheader("📊 Final AI Summary")
                     st.markdown("---")
@@ -698,10 +695,8 @@ else:  # Video mode
                     mime="application/json"
                 )
                 
-                # NEW: Auto-cleanup after output is complete
-                st.markdown("---")
-                with st.spinner("🧹 Cleaning up temporary files..."):
-                    cleanup_temp_folders()
+                # ========== AUTO CLEANUP AFTER OUTPUT ==========
+                cleanup_processing_folders()
             
             # Cleanup temp file
             os.unlink(tfile.name)
