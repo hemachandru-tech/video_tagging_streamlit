@@ -4,7 +4,7 @@ opencv-python-headless
 Pillow
 joblib
 insightface
-google-genai
+google-generativeai
 
 # optional (recommended) for performance & dev
 tqdm
@@ -14,3 +14,4 @@ onnxruntime
 # streamlit web app
 streamlit
 pandas
+imageio-ffmpeg
