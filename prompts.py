@@ -11,20 +11,27 @@ def get_frame_analysis_prompt(player_names):
     """
     players_str = ", ".join(player_names)
  
-    prompt = f"""Detected players in this image: {players_str}
- 
+    prompt = f"""
+Detected players in this image: {players_str}
+
 You see the image with bounding boxes already drawn around each detected player.
-Describe exactly what each detected player is doing right now.
- 
+Create a descriptive tag for this frame following cricket training video tagging conventions.
+
 Rules:
-- Maximum 20 words.
-- Keep it simple and factual.
-- Mention player names.
-- Only describe visible body posture, action, equipment, and mood.
-- No assumptions or guesses. No extra details.
-- Only describe what is clearly visible in the frame.
- 
-Return only a short caption."""
+- Maximum 5 words in title case.
+- Format: [Player Names] + [Activity/Action]
+- Use commas between player names (e.g., "Dhoni, Raina, Rayudu Interaction")
+- Describe the primary visible action or activity (e.g., "Batting", "Catching Practice", "Warm Up", "Interaction", "Padding Up")
+- Keep it concise and searchable.
+- Only tag what is clearly visible in the frame.
+
+Examples:
+- "Dhoni, Raina Nets Interaction"
+- "Rayudu Batting"
+- "Kohli, Sharma Catching Drill"
+
+Return only the tag.
+"""
  
     return prompt
  
@@ -51,14 +58,18 @@ Frame observations:
  
 Now create ONE final summary describing the overall action visible in these frames.
  
+Collate these frame observations into a single descriptive tag. Keep it crisp and concise
+
 Rules:
-- The summary MUST be exactly 15 words.
-- Use simple, clear language.
-- Describe only visible actions, posture, movement, mood, and location.
-- No assumptions or invented details.
-- Combine the meaning of all frame captions into one natural 15-word description.
- 
-Return only the 15-word summary and nothing else."""
+- Maximum 6 words in title case.
+- Identify the common players across frames and list them (e.g., "Dhoni, Fleming")
+- Identify the primary activity or theme (e.g., "Interaction", "Nets", "Catching Practice", "Relaxing")
+- If players are doing the same activity throughout, use that activity
+- If activity varies but players interact, use "Interaction"
+- If multiple distinct activities occur, choose the dominant one
+- Format: [Player Names] + [Activity/Action]
+- Keep it concise and searchable
+Return only the final collated tag."""
  
     return prompt
  
