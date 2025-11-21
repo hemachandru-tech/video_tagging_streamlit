@@ -13,23 +13,23 @@ def get_frame_analysis_prompt(player_names):
  
     prompt = f"""
 Detected players in this image: {players_str}
-
+ 
 You see the image with bounding boxes already drawn around each detected player.
 Create a descriptive tag for this frame following cricket training video tagging conventions.
-
+ 
 Rules:
 - Maximum 5 words in title case.
 - Format: [Player Names] + [Activity/Action]
 - Use commas between player names (e.g., "Dhoni, Raina, Rayudu Interaction")
-- Describe the primary visible action or activity (e.g., "Batting", "Catching Practice", "Warm Up", "Interaction", "Padding Up")
+- Describe the primary visible action or activity (e.g., "Batting", "Catching Practice", "Warm Up", "Interaction")
 - Keep it concise and searchable.
 - Only tag what is clearly visible in the frame.
-
+ 
 Examples:
 - "Dhoni, Raina Nets Interaction"
 - "Rayudu Batting"
 - "Kohli, Sharma Catching Drill"
-
+ 
 Return only the tag.
 """
  
@@ -59,18 +59,16 @@ Frame observations:
 Now create ONE final summary describing the overall action visible in these frames.
  
 Collate these frame observations into a single descriptive tag. Keep it crisp and concise
-
+ 
 Rules:
-- Maximum 6 words in title case.
-- Identify the common players across frames and list them (e.g., "Dhoni, Fleming")
-- Identify the primary activity or theme (e.g., "Interaction", "Nets", "Catching Practice", "Relaxing")
+ 
+- Identify the common players across frames and list them
+- Identify the primary activity or theme (e.g., "Interaction", "Nets", "Catching Practice", "Relaxing", "Batting")
 - If players are doing the same activity throughout, use that activity
 - If activity varies but players interact, use "Interaction"
 - If multiple distinct activities occur, choose the dominant one
-- Format: [Player Names] + [Activity/Action]
 - Keep it concise and searchable
 Return only the final collated tag."""
  
     return prompt
- 
  
