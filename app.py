@@ -71,7 +71,7 @@ st.write("Upload images or videos to recognize cricket players with AI-powered f
 # Sidebar for settings
 st.sidebar.header("⚙️ Detection Settings")
 confidence_threshold = st.sidebar.slider("Confidence Threshold (%)", 0.0, 100.0, 99.99, 0.01)
-sharpness_threshold = st.sidebar.slider("Sharpness Threshold", 0, 100, 10, 1)
+sharpness_threshold = st.sidebar.slider("Sharpness Threshold", 0, 100, 5, 1)
 show_bounding_box = st.sidebar.checkbox("Show Bounding Boxes", value=True)
 show_confidence = st.sidebar.checkbox("Show Confidence Score", value=True)
 
