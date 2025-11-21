@@ -89,7 +89,7 @@ def save_log(log_data, log_type="video_analysis"):
             return {k: clean(v) for k, v in obj.items() if k != "image"}
         if isinstance(obj, list):
             return [clean(i) for i in obj]
-        # FIX: Convert numpy types to Python native types
+        # Convert numpy types to Python native types
         if isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
         if isinstance(obj, (np.floating, np.float64, np.float32)):
@@ -126,7 +126,6 @@ def get_video_duration(video_path):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         return float(result.stdout.strip())
     except:
-        # Quick fallback
         return 0
 
 def clear_folder(folder_path):
@@ -136,6 +135,15 @@ def clear_folder(folder_path):
             os.remove(file)
         except:
             pass
+
+def cleanup_temp_folders():
+    """NEW: Automatically delete all files from frames and annotated folders"""
+    try:
+        clear_folder(FRAMES_DIR)
+        clear_folder(ANNOTATED_DIR)
+        st.info("🧹 Temporary files cleaned up successfully")
+    except Exception as e:
+        st.warning(f"⚠️ Cleanup warning: {str(e)}")
 
 # ================== OPTIMIZED FFMPEG EXTRACTION ==================
 
@@ -158,18 +166,15 @@ def extract_frames_ffmpeg(video_path, output_folder, fps_extract=1.0):
     
     output_pattern = os.path.join(output_folder, "frame_%04d.jpg")
     
-    # OPTIMIZATION 1: Add hardware decoding (if available)
-    # OPTIMIZATION 2: Lower JPEG quality for faster I/O
-    # OPTIMIZATION 3: Faster seek with -skip_frame nokey
     command = [
         'ffmpeg',
-        '-hwaccel', 'auto',              # Hardware acceleration
-        '-skip_frame', 'nokey',          # Skip non-keyframes (faster seeking)
+        '-hwaccel', 'auto',
+        '-skip_frame', 'nokey',
         '-i', video_path,
         '-vf', f'fps={fps_extract}',
-        '-q:v', '10',                    # Lower quality = faster (was 8)
+        '-q:v', '10',
         '-threads', '0',
-        '-preset', 'ultrafast',          # Fastest encoding preset
+        '-preset', 'ultrafast',
         '-y',
         output_pattern
     ]
@@ -218,24 +223,20 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # OPTIMIZATION: Pre-allocate list
     total_frames = len(frame_paths)
     
     for idx, frame_info in enumerate(frame_paths):
-        # OPTIMIZATION: Update UI less frequently (every 5 frames)
         if idx % 5 == 0 or idx == total_frames - 1:
             progress_bar.progress((idx + 1) / total_frames)
             status_text.text(f"🔍 Detecting: {idx + 1}/{total_frames} frames")
         
         try:
-            # OPTIMIZATION: Use cv2.IMREAD_COLOR directly
             frame = cv2.imread(frame_info['path'], cv2.IMREAD_COLOR)
             if frame is None:
                 continue
             
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Use cached global model
             faces = face_app.get(frame_rgb)
             
             if not faces:
@@ -250,7 +251,6 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
             for face in faces:
                 x1, y1, x2, y2 = face.bbox.astype(int)
                 
-                # Ensure valid crop
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(frame_rgb.shape[1], x2), min(frame_rgb.shape[0], y2)
                 
@@ -259,12 +259,10 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                 
                 face_crop = frame_rgb[y1:y2, x1:x2]
                 
-                # Check sharpness
                 sharpness = compute_sharpness(face_crop)
                 if sharpness < sharp_threshold:
                     continue
                 
-                # Predict player
                 embedding = face.embedding
                 predicted_label = clf.predict([embedding])[0]
                 predicted_name = label_encoder.inverse_transform([predicted_label])[0]
@@ -272,22 +270,19 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                 confidence = None
                 if hasattr(clf, "predict_proba"):
                     proba = clf.predict_proba([embedding])
-                    confidence = np.max(proba) * 100
+                    confidence = float(np.max(proba) * 100)
                 
                 if confidence is not None and confidence < conf_threshold:
                     continue
                 
-                # OPTIMIZATION: Only draw if we'll save the image
                 detections.append({
                     'name': predicted_name,
-                    'confidence': float(confidence) if confidence else 0.0,
+                    'confidence': confidence if confidence else 0.0,
                     'bbox': [int(x1), int(y1), int(x2), int(y2)]
                 })
             
-            # Save annotated frame only if detections found
             annotated_path = None
             if detections:
-                # Draw boxes only when needed
                 for det in detections:
                     x1, y1, x2, y2 = det['bbox']
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -295,7 +290,6 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
                                (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
                 
                 annotated_path = os.path.join(ANNOTATED_DIR, f"annotated_{frame_info['second']}.jpg")
-                # OPTIMIZATION: Use lower quality for faster saves
                 cv2.imwrite(annotated_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             
             result = {
@@ -319,7 +313,7 @@ def detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold):
     
     return results, frames_with_players
 
-# ================== STEP 3: PARALLEL LLM ANALYSIS ==================
+# ================== PARALLEL LLM ANALYSIS ==================
 
 def analyze_frame_llm_worker(args):
     """Worker for parallel LLM analysis"""
@@ -329,14 +323,11 @@ def analyze_frame_llm_worker(args):
         if not frame_data['detections']:
             return None
         
-        # Load annotated frame
         image = Image.open(frame_data['annotated_path'])
         
-        # Prepare prompt
         players = [d['name'] for d in frame_data['detections']]
         prompt = get_frame_analysis_prompt(players)
         
-        # Call Gemini
         response = model.generate_content([prompt, image])
         
         return {
@@ -352,8 +343,6 @@ def analyze_frame_llm_worker(args):
             'description': f"Error: {str(e)}"
         }
 
-# ================== OPTIMIZED LLM WITH BATCH PROCESSING ==================
-
 def parallel_llm_analysis(frames_with_players, num_workers=4):
     """
     OPTIMIZED: Process in batches to reduce API overhead
@@ -361,7 +350,6 @@ def parallel_llm_analysis(frames_with_players, num_workers=4):
     if not frames_with_players:
         return []
     
-    # OPTIMIZATION: Process in smaller chunks to show progress faster
     analyses = []
     
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -375,13 +363,12 @@ def parallel_llm_analysis(frames_with_players, num_workers=4):
         
         for future in as_completed(futures):
             completed += 1
-            # OPTIMIZATION: Update less frequently
             if completed % max(1, total // 20) == 0 or completed == total:
                 progress_bar.progress(completed / total)
                 status_text.text(f"🤖 AI: {completed}/{total} frames")
             
             try:
-                result = future.result(timeout=30)  # Add timeout
+                result = future.result(timeout=30)
                 if result:
                     analyses.append(result)
             except Exception as e:
@@ -394,20 +381,16 @@ def parallel_llm_analysis(frames_with_players, num_workers=4):
     
     return analyses
 
-
 # ================== FINAL SUMMARY GENERATION ==================
 
 def generate_final_summary(llm_analyses, all_detected_players):
     """
     Generate final summary using existing prompt from prompts.py
-    Converts data to match expected format: frame_analyses with 'frame', 'timestamp', 'players', 'analysis'
     """
     if not GEMINI_API_KEY or not llm_analyses:
         return None
     
     try:
-        # Convert llm_analyses to the format expected by get_final_summary_prompt
-        # Expected format: [{'frame': X, 'timestamp': Y, 'players': [...], 'analysis': '...'}]
         frame_analyses = []
         for analysis in llm_analyses:
             frame_info = analysis.get('frame_info', {})
@@ -418,7 +401,6 @@ def generate_final_summary(llm_analyses, all_detected_players):
                 'analysis': analysis.get('description', '')
             })
         
-        # Use existing prompt from prompts.py
         prompt = get_final_summary_prompt(frame_analyses, all_detected_players)
         
         response = model.generate_content(prompt)
@@ -435,7 +417,7 @@ def generate_final_summary(llm_analyses, all_detected_players):
 
 def process_video_ultrafast(video_path, conf_threshold, sharp_threshold, fps_extract, num_workers):
     """
-    Ultra-fast 3-step pipeline + Final Summary
+    Ultra-fast 3-step pipeline + Final Summary + Auto Cleanup
     """
     pipeline_start = datetime.now()
     
@@ -450,7 +432,7 @@ def process_video_ultrafast(video_path, conf_threshold, sharp_threshold, fps_ext
         st.error("❌ No frames extracted")
         return None
     
-    # Step 2: Sequential Face Detection (USES CACHED MODEL)
+    # Step 2: Sequential Face Detection
     st.markdown("### 👤 Step 2: Face Detection (Cached Model)")
     step2_start = datetime.now()
     all_results, frames_with_players = detect_faces_sequential(frame_paths, conf_threshold, sharp_threshold)
@@ -502,10 +484,10 @@ def process_video_ultrafast(video_path, conf_threshold, sharp_threshold, fps_ext
         }
     }
 
-# ================== IMAGE MODE (UNCHANGED) ==================
+# ================== IMAGE MODE ==================
 
 def process_image(image_np, conf_threshold, sharp_threshold, show_bbox, show_conf):
-    """Process single image (original logic)"""
+    """Process single image"""
     image_rgb = image_np.copy()
     faces = face_app.get(image_rgb)
 
@@ -529,7 +511,7 @@ def process_image(image_np, conf_threshold, sharp_threshold, show_bbox, show_con
         confidence = None
         if hasattr(clf, "predict_proba"):
             proba = clf.predict_proba([embedding])
-            confidence = np.max(proba) * 100
+            confidence = float(np.max(proba) * 100)
 
         if confidence is not None and confidence < conf_threshold:
             continue
@@ -614,7 +596,6 @@ else:  # Video mode
     if not GEMINI_API_KEY:
         st.warning("⚠️ GEMINI_API_KEY not found in .env file. AI analysis will be disabled.")
     
-    # Check FFmpeg
     if not shutil.which('ffmpeg'):
         st.error("❌ FFmpeg not found! Please install FFmpeg for ultra-fast processing.")
         st.markdown("**Install FFmpeg:**")
@@ -623,7 +604,6 @@ else:  # Video mode
     uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov", "mkv", "flv", "wmv"])
     
     if uploaded_video:
-        # Save uploaded video to temporary file
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         tfile.write(uploaded_video.read())
         tfile.close()
@@ -632,7 +612,6 @@ else:  # Video mode
         
         if st.button("🚀 Process Video (Ultra Fast)", type="primary"):
             
-            # Clear previous results
             clear_folder(FRAMES_DIR)
             clear_folder(ANNOTATED_DIR)
             
@@ -670,7 +649,7 @@ else:  # Video mode
                 else:
                     st.warning("⚠️ No players detected in the video")
                 
-                # ========== FINAL SUMMARY (NEW) ==========
+                # FINAL SUMMARY
                 if video_data.get('final_summary'):
                     st.subheader("📊 Final AI Summary")
                     st.markdown("---")
@@ -718,6 +697,11 @@ else:  # Video mode
                     file_name=f"analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                     mime="application/json"
                 )
+                
+                # NEW: Auto-cleanup after output is complete
+                st.markdown("---")
+                with st.spinner("🧹 Cleaning up temporary files..."):
+                    cleanup_temp_folders()
             
             # Cleanup temp file
             os.unlink(tfile.name)
