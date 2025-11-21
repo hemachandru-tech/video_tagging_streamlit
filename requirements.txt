@@ -1,0 +1,16 @@
+# core
+numpy
+opencv-python-headless
+Pillow
+joblib
+insightface
+google-genai
+
+# optional (recommended) for performance & dev
+tqdm
+python-dotenv
+onnxruntime
+
+# streamlit web app
+streamlit
+pandas

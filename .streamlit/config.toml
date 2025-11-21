@@ -1,0 +1,6 @@
+[server]
+# Allow very large file uploads (10GB = 10240 MB)
+maxUploadSize = 10240
+maxMessageSize = 10240
+fileWatcherType = "poll"
+
