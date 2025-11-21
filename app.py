@@ -601,7 +601,19 @@ else:  # Video mode
     
     if uploaded_video:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-        tfile.write(uploaded_video.read())
+        # tfile.write(uploaded_video.read())
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+
+        CHUNK_SIZE = 1024 * 1024  # 1 MB
+        
+        video_bytes = uploaded_video.stream  # raw binary stream
+        
+        while True:
+            chunk = video_bytes.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            tfile.write(chunk)
+        
         tfile.close()
         
         st.video(uploaded_video)
